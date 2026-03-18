@@ -431,7 +431,7 @@ Resources:
       FunctionName: !Ref OrderProcessorFunction
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub '${OrdersApi}/*/POST/orders'
+      SourceArn: !Sub 'arn:aws:execute-api:us-east-1:${AWS::AccountId}:${OrdersApi}/*/POST/orders'
 
   ApiGatewayInvokePermissionGet:
     Type: AWS::Lambda::Permission
@@ -439,7 +439,7 @@ Resources:
       FunctionName: !Ref OrderProcessorFunction
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub '${OrdersApi}/*/GET/orders'
+      SourceArn: !Sub 'arn:aws:execute-api:us-east-1:${AWS::AccountId}:${OrdersApi}/*/GET/orders'
 
   ApiGatewayInvokePermissionGetOrder:
     Type: AWS::Lambda::Permission
@@ -447,7 +447,7 @@ Resources:
       FunctionName: !Ref OrderProcessorFunction
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub '${OrdersApi}/*/GET/orders/*'
+      SourceArn: !Sub 'arn:aws:execute-api:us-east-1:${AWS::AccountId}:${OrdersApi}/*/GET/orders/*'
 
 Outputs:
   ApiUrl:
