@@ -127,6 +127,27 @@ Before starting, ensure you have:
 
 ## Troubleshooting
 
+### CORS Errors
+If you see CORS errors when submitting orders:
+1. **Update CloudFormation Stack**:
+   - Go to CloudFormation console
+   - Select your stack (`naturemama-heritage-infrastructure`)
+   - Click "Update"
+   - Choose "Replace current template"
+   - Upload the updated `aws-infrastructure.yaml` file
+   - Complete the update process
+
+2. **Redeploy API Gateway**:
+   - Go to API Gateway console
+   - Find your API (`naturemama-orders-api`)
+   - Click "Actions" → "Deploy API"
+   - Select "prod" stage
+   - Click "Deploy"
+
+3. **Test CORS**:
+   - In browser developer tools, check if OPTIONS requests are successful
+   - Verify API responses include `Access-Control-Allow-Origin: *` header
+
 ### Email Not Sending
 - Check SES is out of sandbox mode
 - Verify sender email address in SES
