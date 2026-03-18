@@ -76,21 +76,31 @@ export const CartProvider = ({ children }) => {
 
   // Load cart from localStorage on mount
   useEffect(() => {
-    const savedCart = localStorage.getItem('naturemama-cart');
-    if (savedCart) {
-      const parsedCart = JSON.parse(savedCart);
-      parsedCart.items.forEach(item => {
-        dispatch({ type: 'ADD_TO_CART', payload: item });
-      });
-      if (parsedCart.promoCode) {
-        dispatch({ type: 'APPLY_PROMO', payload: parsedCart.promoCode });
+    try {
+      const savedCart = localStorage.getItem('naturemama-cart');
+      if (savedCart) {
+        const parsedCart = JSON.parse(savedCart);
+        if (parsedCart.items && Array.isArray(parsedCart.items)) {
+          parsedCart.items.forEach(item => {
+            dispatch({ type: 'ADD_TO_CART', payload: item });
+          });
+        }
+        if (parsedCart.promoCode) {
+          dispatch({ type: 'APPLY_PROMO', payload: parsedCart.promoCode });
+        }
       }
+    } catch (error) {
+      console.error('Error loading cart from localStorage:', error);
     }
   }, []);
 
   // Save cart to localStorage whenever it changes
   useEffect(() => {
-    localStorage.setItem('naturemama-cart', JSON.stringify(state));
+    try {
+      localStorage.setItem('naturemama-cart', JSON.stringify(state));
+    } catch (error) {
+      console.error('Error saving cart to localStorage:', error);
+    }
   }, [state]);
 
   const addToCart = (product, quantity = 1) => {

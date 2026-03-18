@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useInView } from 'react-intersection-observer';
 import { Zap, Heart, Shield, Baby, Star, ShoppingCart, Info, Leaf } from 'lucide-react';
+import { useCart } from '../context/CartContext';
 
 const OurProducts = () => {
   const [ref, inView] = useInView({
@@ -10,6 +11,44 @@ const OurProducts = () => {
   });
 
   const [selectedLine, setSelectedLine] = useState('all');
+  const { addToCart } = useCart();
+
+  const handleAddToCart = (product) => {
+    try {
+      addToCart({
+        id: product.id,
+        name: product.name,
+        price: product.price,
+        originalPrice: product.originalPrice,
+        image: product.image,
+        line: getLineDisplayName(product.line),
+        duration: product.duration
+      });
+      
+      // Show success notification
+      const notification = document.createElement('div');
+      notification.className = 'fixed top-4 right-4 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 transition-all duration-300';
+      notification.textContent = `${product.name} added to cart!`;
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        notification.style.opacity = '0';
+        setTimeout(() => document.body.removeChild(notification), 300);
+      }, 2000);
+    } catch (error) {
+      console.error('Error adding to cart:', error);
+    }
+  };
+
+  const getLineDisplayName = (lineId) => {
+    const lineMap = {
+      'vitality': 'Vitality Line',
+      'serenity': 'Serenity Line',
+      'immunity': 'Immunity Line',
+      'children': 'Children\'s Line'
+    };
+    return lineMap[lineId] || 'Product Line';
+  };
 
   const productLines = [
     { id: 'all', name: 'All Products', icon: Leaf },
@@ -256,7 +295,10 @@ const OurProducts = () => {
                       <button className="p-2 text-gray-600 hover:text-green-600 transition-colors">
                         <Info className="h-5 w-5" />
                       </button>
-                      <button className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors duration-200">
+                      <button 
+                        onClick={() => handleAddToCart(product)}
+                        className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors duration-200"
+                      >
                         <ShoppingCart className="h-4 w-4" />
                         Add to Cart
                       </button>

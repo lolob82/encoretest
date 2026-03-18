@@ -61,8 +61,21 @@ const ProductShowcase = () => {
   ];
 
   const handleAddToCart = (product) => {
-    addToCart(product);
-    // Optional: Show a toast notification
+    try {
+      addToCart(product);
+      // Show success feedback
+      const notification = document.createElement('div');
+      notification.className = 'fixed top-4 right-4 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 transition-all duration-300';
+      notification.textContent = `${product.name} added to cart!`;
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        notification.style.opacity = '0';
+        setTimeout(() => document.body.removeChild(notification), 300);
+      }, 2000);
+    } catch (error) {
+      console.error('Error adding to cart:', error);
+    }
   };
 
   return (
