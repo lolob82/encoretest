@@ -54,6 +54,11 @@ const ShoppingCartPage = () => {
       setOrderDetails(result);
       setOrderComplete(true);
       clearCart();
+      
+      // Show additional message if in fallback mode
+      if (result.fallbackMode) {
+        console.log('Order processed in fallback mode - API not available');
+      }
     } catch (error) {
       alert('There was an error processing your order. Please try again.');
       console.error('Order submission error:', error);

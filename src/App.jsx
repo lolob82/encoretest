@@ -9,6 +9,7 @@ import OurProducts from './pages/OurProducts';
 import OurCommitments from './pages/OurCommitments';
 import ShoppingCart from './pages/ShoppingCart';
 import './App.css';
+import './utils/orderUtils'; // Initialize order utilities
 
 function App() {
   return (
