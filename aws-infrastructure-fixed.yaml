@@ -1,0 +1,429 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'NatureMama Heritage E-commerce Infrastructure - CORS Fixed Version'
+
+Parameters:
+  SenderEmail:
+    Type: String
+    Description: 'Verified email address for sending order confirmations'
+    Default: 'orders@naturemama-heritage.com'
+
+Resources:
+  # DynamoDB Table for Orders
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: 'naturemama-orders'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: 'orderNumber'
+          AttributeType: 'S'
+      KeySchema:
+        - AttributeName: 'orderNumber'
+          KeyType: 'HASH'
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: 'Project'
+          Value: 'NatureMama-Heritage'
+
+  # IAM Role for Lambda Function
+  OrderProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: 'naturemama-order-processor-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: 'DynamoDBAccess'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt OrdersTable.Arn
+        - PolicyName: 'SESAccess'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+
+  # Lambda Function for Order Processing
+  OrderProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: 'naturemama-order-processor'
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt OrderProcessorRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Ref OrdersTable
+          SENDER_EMAIL: !Ref SenderEmail
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const dynamodb = new AWS.DynamoDB.DocumentClient();
+          const ses = new AWS.SES();
+
+          exports.handler = async (event) => {
+            console.log('Event:', JSON.stringify(event, null, 2));
+
+            const corsHeaders = {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+              'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+              'Content-Type': 'application/json'
+            };
+
+            // Handle CORS preflight
+            if (event.httpMethod === 'OPTIONS') {
+              return {
+                statusCode: 200,
+                headers: corsHeaders,
+                body: JSON.stringify({ message: 'CORS preflight successful' })
+              };
+            }
+
+            try {
+              const { httpMethod, pathParameters } = event;
+
+              if (httpMethod === 'POST' && event.resource === '/orders') {
+                return await createOrder(event, corsHeaders);
+              } else if (httpMethod === 'GET' && pathParameters && pathParameters.orderNumber) {
+                return await getOrder(pathParameters.orderNumber, corsHeaders);
+              } else if (httpMethod === 'GET' && event.resource === '/orders') {
+                return await listOrders(event, corsHeaders);
+              }
+
+              return {
+                statusCode: 404,
+                headers: corsHeaders,
+                body: JSON.stringify({ error: 'Endpoint not found' })
+              };
+            } catch (error) {
+              console.error('Error:', error);
+              return {
+                statusCode: 500,
+                headers: corsHeaders,
+                body: JSON.stringify({ 
+                  error: 'Internal server error',
+                  message: error.message 
+                })
+              };
+            }
+          };
+
+          async function createOrder(event, corsHeaders) {
+            const orderData = JSON.parse(event.body);
+            
+            // Generate order number if not provided
+            if (!orderData.orderNumber) {
+              const timestamp = Date.now();
+              const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+              orderData.orderNumber = `NM${timestamp}${random}`;
+            }
+
+            // Add metadata
+            orderData.createdAt = new Date().toISOString();
+            orderData.status = 'confirmed';
+
+            // Save to DynamoDB
+            await dynamodb.put({
+              TableName: process.env.ORDERS_TABLE,
+              Item: orderData
+            }).promise();
+
+            // Send confirmation email
+            try {
+              await sendOrderConfirmationEmail(orderData);
+            } catch (emailError) {
+              console.error('Email sending failed:', emailError);
+              // Don't fail the order if email fails
+            }
+
+            return {
+              statusCode: 201,
+              headers: corsHeaders,
+              body: JSON.stringify({
+                success: true,
+                orderNumber: orderData.orderNumber,
+                total: orderData.total,
+                message: 'Order created successfully'
+              })
+            };
+          }
+
+          async function getOrder(orderNumber, corsHeaders) {
+            const result = await dynamodb.get({
+              TableName: process.env.ORDERS_TABLE,
+              Key: { orderNumber }
+            }).promise();
+
+            if (!result.Item) {
+              return {
+                statusCode: 404,
+                headers: corsHeaders,
+                body: JSON.stringify({ error: 'Order not found' })
+              };
+            }
+
+            return {
+              statusCode: 200,
+              headers: corsHeaders,
+              body: JSON.stringify(result.Item)
+            };
+          }
+
+          async function listOrders(event, corsHeaders) {
+            const { limit = 50, lastKey } = event.queryStringParameters || {};
+            
+            const params = {
+              TableName: process.env.ORDERS_TABLE,
+              Limit: parseInt(limit)
+            };
+
+            if (lastKey) {
+              params.ExclusiveStartKey = JSON.parse(decodeURIComponent(lastKey));
+            }
+
+            const result = await dynamodb.scan(params).promise();
+
+            return {
+              statusCode: 200,
+              headers: corsHeaders,
+              body: JSON.stringify({
+                orders: result.Items,
+                lastKey: result.LastEvaluatedKey ? encodeURIComponent(JSON.stringify(result.LastEvaluatedKey)) : null,
+                count: result.Count
+              })
+            };
+          }
+
+          async function sendOrderConfirmationEmail(orderData) {
+            const { customer, items, total, orderNumber } = orderData;
+            
+            const itemsHtml = items.map(item => `
+              <tr style="border-bottom: 1px solid #e5e7eb;">
+                <td style="padding: 12px 0;">
+                  <div style="font-weight: 600; color: #111827;">${item.name}</div>
+                  <div style="font-size: 14px; color: #16a34a;">${item.line}</div>
+                  <div style="font-size: 14px; color: #6b7280;">Quantity: ${item.quantity}</div>
+                </td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #16a34a;">
+                  €${(item.price * item.quantity).toFixed(2)}
+                </td>
+              </tr>
+            `).join('');
+
+            const emailHtml = `
+              <!DOCTYPE html>
+              <html>
+              <head>
+                <meta charset="utf-8">
+                <title>Order Confirmation - NatureMama Heritage</title>
+              </head>
+              <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <div style="background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; padding: 30px; border-radius: 12px; text-align: center; margin-bottom: 30px;">
+                  <h1 style="font-size: 28px; margin: 0 0 10px 0;">NatureMama Heritage</h1>
+                  <p style="font-size: 16px; margin: 0;">Natural wellness from the French Alps</p>
+                </div>
+
+                <div style="background: #f8fafc; padding: 25px; border-radius: 12px; margin-bottom: 25px;">
+                  <h2 style="color: #16a34a; margin: 0 0 15px 0;">Order Confirmed!</h2>
+                  <p style="margin: 0 0 15px 0;">Thank you for your order, ${customer.fullName}.</p>
+                  <div style="background: white; padding: 15px; border-radius: 8px;">
+                    <strong style="color: #16a34a;">Order Number: ${orderNumber}</strong>
+                  </div>
+                </div>
+
+                <div style="background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 25px; margin-bottom: 25px;">
+                  <h3 style="color: #111827; margin: 0 0 20px 0;">Order Details</h3>
+                  <table style="width: 100%; border-collapse: collapse;">
+                    ${itemsHtml}
+                    <tr style="border-top: 2px solid #16a34a;">
+                      <td style="padding: 15px 0; font-weight: 600; font-size: 18px;">Total</td>
+                      <td style="padding: 15px 0; text-align: right; font-weight: 700; font-size: 18px; color: #16a34a;">€${total.toFixed(2)}</td>
+                    </tr>
+                  </table>
+                </div>
+
+                <div style="text-align: center; padding: 20px; color: #6b7280;">
+                  <p>Thank you for choosing NatureMama Heritage</p>
+                </div>
+              </body>
+              </html>
+            `;
+
+            const params = {
+              Source: process.env.SENDER_EMAIL,
+              Destination: {
+                ToAddresses: [customer.email]
+              },
+              Message: {
+                Subject: {
+                  Data: `Order Confirmation - ${orderNumber} - NatureMama Heritage`,
+                  Charset: 'UTF-8'
+                },
+                Body: {
+                  Html: {
+                    Data: emailHtml,
+                    Charset: 'UTF-8'
+                  }
+                }
+              }
+            };
+
+            await ses.sendEmail(params).promise();
+          }
+
+  # API Gateway REST API
+  OrdersApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: 'naturemama-orders-api'
+      Description: 'API for NatureMama Heritage order processing'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # API Gateway Resource for /orders
+  OrdersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ParentId: !GetAtt OrdersApi.RootResourceId
+      PathPart: 'orders'
+
+  # API Gateway Resource for /orders/{orderNumber}
+  OrderResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ParentId: !Ref OrdersResource
+      PathPart: '{orderNumber}'
+
+  # OPTIONS Method for /orders
+  OrdersOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ResourceId: !Ref OrdersResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
+
+  # OPTIONS Method for /orders/{orderNumber}
+  OrderOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ResourceId: !Ref OrderResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
+
+  # POST Method for creating orders
+  OrdersPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ResourceId: !Ref OrdersResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
+
+  # GET Method for listing orders
+  OrdersGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ResourceId: !Ref OrdersResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
+
+  # GET Method for individual orders
+  OrderGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ResourceId: !Ref OrderResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
+
+  # API Gateway Deployment
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - OrdersPostMethod
+      - OrdersGetMethod
+      - OrderGetMethod
+      - OrdersOptionsMethod
+      - OrderOptionsMethod
+    Properties:
+      RestApiId: !Ref OrdersApi
+      StageName: 'prod'
+
+  # Lambda Permissions for API Gateway
+  ApiGatewayInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref OrderProcessorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:us-east-1:${AWS::AccountId}:${OrdersApi}/*/*'
+
+Outputs:
+  ApiUrl:
+    Description: 'API Gateway URL for the orders API'
+    Value: !Sub 'https://${OrdersApi}.execute-api.us-east-1.amazonaws.com/prod'
+    Export:
+      Name: 'NatureMama-Orders-API-URL'
+
+  DynamoDBTableName:
+    Description: 'DynamoDB table name for orders'
+    Value: !Ref OrdersTable
+    Export:
+      Name: 'NatureMama-Orders-Table'
+
+  LambdaFunctionName:
+    Description: 'Lambda function name for order processing'
+    Value: !Ref OrderProcessorFunction
+    Export:
+      Name: 'NatureMama-Order-Processor-Function'

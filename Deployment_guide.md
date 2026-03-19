@@ -32,33 +32,37 @@ Before starting, ensure you have:
 
 ## Step 2: Deploy AWS Infrastructure
 
-1. **Open CloudFormation Console**
-   - Navigate to https://console.aws.amazon.com/cloudformation/
-   - Make sure you're in the **us-east-1** region
+### Option A: Quick Fix (Immediate Solution)
+If you're experiencing CORS issues, use the fixed template:
 
-2. **Create New Stack**
+1. **Delete Current Stack** (if it exists and has issues):
+   - Go to CloudFormation Console
+   - Select your stack (`naturemama-heritage-infrastructure`)
+   - Click "Delete" and wait for completion
+
+2. **Deploy Fixed Template**:
    - Click "Create stack" → "With new resources (standard)"
    - Select "Upload a template file"
-   - Click "Choose file" and select `aws-infrastructure.yaml`
-   - Click "Next"
-
-3. **Configure Stack**
+   - Choose `aws-infrastructure-fixed.yaml` (the new fixed version)
    - **Stack name**: `naturemama-heritage-infrastructure`
-   - **SenderEmail**: Enter your verified email address (e.g., `orders@naturemama-heritage.com`)
-   - Click "Next"
+   - **SenderEmail**: Enter your verified email address
+   - Complete deployment (5-10 minutes)
 
-4. **Configure Stack Options**
-   - Leave all defaults
-   - Click "Next"
+### Option B: Update Existing Stack
+If you want to update your existing stack:
 
-5. **Review and Deploy**
-   - Check "I acknowledge that AWS CloudFormation might create IAM resources"
-   - Click "Create stack"
-   - Wait for deployment (usually 5-10 minutes)
+1. **Update CloudFormation Stack**:
+   - Go to CloudFormation Console
+   - Select your stack
+   - Click "Update" → "Replace current template"
+   - Upload `aws-infrastructure-fixed.yaml`
+   - Complete the update
 
-6. **Get API URL**
-   - Once deployment is complete, click the "Outputs" tab
-   - Copy the **ApiUrl** value (looks like: `https://abc123.execute-api.us-east-1.amazonaws.com/prod`)
+2. **Force API Gateway Redeploy**:
+   - Go to API Gateway Console
+   - Find your API (`naturemama-orders-api`)
+   - Click "Actions" → "Deploy API"
+   - Select "prod" stage → "Deploy"
 
 ## Step 3: Configure Your Website
 
