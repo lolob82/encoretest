@@ -95,10 +95,11 @@ Resources:
           };
 
           exports.handler = async (event) => {
-            console.log('Event:', JSON.stringify(event, null, 2));
+            console.log('Event received:', JSON.stringify(event, null, 2));
 
             // Handle CORS preflight
             if (event.httpMethod === 'OPTIONS') {
+              console.log('Handling CORS preflight request');
               return {
                 statusCode: 200,
                 headers: corsHeaders,
@@ -107,23 +108,24 @@ Resources:
             }
 
             try {
-              const { httpMethod, pathParameters } = event;
+              const { httpMethod, resource, pathParameters } = event;
+              console.log('Processing request:', { httpMethod, resource, pathParameters });
 
-              if (httpMethod === 'POST' && event.path === '/orders') {
+              if (httpMethod === 'POST' && resource === '/orders') {
                 return await createOrder(event);
               } else if (httpMethod === 'GET' && pathParameters && pathParameters.orderNumber) {
                 return await getOrder(pathParameters.orderNumber);
-              } else if (httpMethod === 'GET' && event.path === '/orders') {
+              } else if (httpMethod === 'GET' && resource === '/orders') {
                 return await listOrders(event);
               }
 
               return {
                 statusCode: 404,
                 headers: corsHeaders,
-                body: JSON.stringify({ error: 'Endpoint not found' })
+                body: JSON.stringify({ error: 'Endpoint not found', resource, httpMethod })
               };
             } catch (error) {
-              console.error('Error:', error);
+              console.error('Lambda error:', error);
               return {
                 statusCode: 500,
                 headers: corsHeaders,
@@ -136,7 +138,20 @@ Resources:
           };
 
           async function createOrder(event) {
-            const orderData = JSON.parse(event.body);
+            console.log('Creating order...');
+            
+            let orderData;
+            try {
+              orderData = JSON.parse(event.body);
+              console.log('Parsed order data:', orderData);
+            } catch (parseError) {
+              console.error('JSON parse error:', parseError);
+              return {
+                statusCode: 400,
+                headers: corsHeaders,
+                body: JSON.stringify({ error: 'Invalid JSON in request body' })
+              };
+            }
             
             // Generate order number if not provided
             if (!orderData.orderNumber) {
@@ -149,14 +164,33 @@ Resources:
             orderData.createdAt = new Date().toISOString();
             orderData.status = 'confirmed';
 
+            console.log('Saving to DynamoDB:', orderData.orderNumber);
+
             // Save to DynamoDB
-            await dynamodb.put({
-              TableName: process.env.ORDERS_TABLE,
-              Item: orderData
-            }).promise();
+            try {
+              await dynamodb.put({
+                TableName: process.env.ORDERS_TABLE,
+                Item: orderData
+              }).promise();
+              console.log('Order saved to DynamoDB successfully');
+            } catch (dbError) {
+              console.error('DynamoDB error:', dbError);
+              return {
+                statusCode: 500,
+                headers: corsHeaders,
+                body: JSON.stringify({ error: 'Database error', details: dbError.message })
+              };
+            }
 
             // Send confirmation email
-            await sendOrderConfirmationEmail(orderData);
+            try {
+              console.log('Sending confirmation email...');
+              await sendOrderConfirmationEmail(orderData);
+              console.log('Email sent successfully');
+            } catch (emailError) {
+              console.error('Email sending failed:', emailError);
+              // Don't fail the order if email fails, but log it
+            }
 
             return {
               statusCode: 201,
@@ -171,27 +205,40 @@ Resources:
           }
 
           async function getOrder(orderNumber) {
-            const result = await dynamodb.get({
-              TableName: process.env.ORDERS_TABLE,
-              Key: { orderNumber }
-            }).promise();
+            console.log('Getting order:', orderNumber);
+            
+            try {
+              const result = await dynamodb.get({
+                TableName: process.env.ORDERS_TABLE,
+                Key: { orderNumber }
+              }).promise();
 
-            if (!result.Item) {
+              if (!result.Item) {
+                return {
+                  statusCode: 404,
+                  headers: corsHeaders,
+                  body: JSON.stringify({ error: 'Order not found' })
+                };
+              }
+
               return {
-                statusCode: 404,
+                statusCode: 200,
                 headers: corsHeaders,
-                body: JSON.stringify({ error: 'Order not found' })
+                body: JSON.stringify(result.Item)
+              };
+            } catch (error) {
+              console.error('Get order error:', error);
+              return {
+                statusCode: 500,
+                headers: corsHeaders,
+                body: JSON.stringify({ error: 'Database error', details: error.message })
               };
             }
-
-            return {
-              statusCode: 200,
-              headers: corsHeaders,
-              body: JSON.stringify(result.Item)
-            };
           }
 
           async function listOrders(event) {
+            console.log('Listing orders...');
+            
             const { limit = 50, lastKey } = event.queryStringParameters || {};
             
             const params = {
@@ -200,30 +247,45 @@ Resources:
             };
 
             if (lastKey) {
-              params.ExclusiveStartKey = JSON.parse(decodeURIComponent(lastKey));
+              try {
+                params.ExclusiveStartKey = JSON.parse(decodeURIComponent(lastKey));
+              } catch (e) {
+                console.error('Invalid lastKey:', e);
+              }
             }
 
-            const result = await dynamodb.scan(params).promise();
+            try {
+              const result = await dynamodb.scan(params).promise();
 
-            return {
-              statusCode: 200,
-              headers: corsHeaders,
-              body: JSON.stringify({
-                orders: result.Items,
-                lastKey: result.LastEvaluatedKey ? encodeURIComponent(JSON.stringify(result.LastEvaluatedKey)) : null,
-                count: result.Count
-              })
-            };
+              return {
+                statusCode: 200,
+                headers: corsHeaders,
+                body: JSON.stringify({
+                  orders: result.Items,
+                  lastKey: result.LastEvaluatedKey ? encodeURIComponent(JSON.stringify(result.LastEvaluatedKey)) : null,
+                  count: result.Count
+                })
+              };
+            } catch (error) {
+              console.error('List orders error:', error);
+              return {
+                statusCode: 500,
+                headers: corsHeaders,
+                body: JSON.stringify({ error: 'Database error', details: error.message })
+              };
+            }
           }
 
           async function sendOrderConfirmationEmail(orderData) {
             const { customer, items, total, orderNumber } = orderData;
             
+            console.log('Preparing email for:', customer.email);
+            
             const itemsHtml = items.map(item => `
               <tr style="border-bottom: 1px solid #e5e7eb;">
                 <td style="padding: 12px 0;">
                   <div style="font-weight: 600; color: #111827;">${item.name}</div>
-                  <div style="font-size: 14px; color: #16a34a;">${item.line}</div>
+                  <div style="font-size: 14px; color: #16a34a;">${item.line || 'Product Line'}</div>
                   <div style="font-size: 14px; color: #6b7280;">Quantity: ${item.quantity}</div>
                 </td>
                 <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #16a34a;">
@@ -237,25 +299,24 @@ Resources:
               <html>
               <head>
                 <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Order Confirmation - NatureMama Heritage</title>
               </head>
-              <body style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
                 <div style="background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; padding: 30px; border-radius: 12px; text-align: center; margin-bottom: 30px;">
-                  <h1 style="font-family: 'Playfair Display', serif; font-size: 28px; margin: 0 0 10px 0;">NatureMama Heritage</h1>
-                  <p style="font-size: 16px; margin: 0; opacity: 0.9;">Natural wellness from the French Alps</p>
+                  <h1 style="font-size: 28px; margin: 0 0 10px 0;">NatureMama Heritage</h1>
+                  <p style="font-size: 16px; margin: 0;">Natural wellness from the French Alps</p>
                 </div>
 
                 <div style="background: #f8fafc; padding: 25px; border-radius: 12px; margin-bottom: 25px;">
-                  <h2 style="color: #16a34a; margin: 0 0 15px 0; font-size: 24px;">Order Confirmed!</h2>
-                  <p style="margin: 0 0 15px 0; font-size: 16px;">Thank you for your order, ${customer.fullName}. We're preparing your natural wellness products with care.</p>
-                  <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #16a34a;">
+                  <h2 style="color: #16a34a; margin: 0 0 15px 0;">Order Confirmed!</h2>
+                  <p style="margin: 0 0 15px 0;">Thank you for your order, ${customer.fullName}.</p>
+                  <div style="background: white; padding: 15px; border-radius: 8px;">
                     <strong style="color: #16a34a;">Order Number: ${orderNumber}</strong>
                   </div>
                 </div>
 
                 <div style="background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 25px; margin-bottom: 25px;">
-                  <h3 style="color: #111827; margin: 0 0 20px 0; font-size: 18px; border-bottom: 2px solid #16a34a; padding-bottom: 10px;">Order Details</h3>
+                  <h3 style="color: #111827; margin: 0 0 20px 0;">Order Details</h3>
                   <table style="width: 100%; border-collapse: collapse;">
                     ${itemsHtml}
                     <tr style="border-top: 2px solid #16a34a;">
@@ -266,30 +327,18 @@ Resources:
                 </div>
 
                 <div style="background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 25px; margin-bottom: 25px;">
-                  <h3 style="color: #111827; margin: 0 0 15px 0; font-size: 18px;">Shipping Address</h3>
+                  <h3 style="color: #111827; margin: 0 0 15px 0;">Shipping Address</h3>
                   <div style="color: #6b7280; line-height: 1.8;">
                     ${customer.fullName}<br>
                     ${customer.street}<br>
                     ${customer.postalCode} ${customer.city}<br>
-                    ${customer.phone}
+                    Phone: ${customer.phone}
                   </div>
                 </div>
 
-                <div style="background: #ecfdf5; border: 1px solid #d1fae5; border-radius: 12px; padding: 20px; margin-bottom: 25px;">
-                  <h3 style="color: #16a34a; margin: 0 0 10px 0; font-size: 16px;">What's Next?</h3>
-                  <ul style="margin: 0; padding-left: 20px; color: #065f46;">
-                    <li>Your order will be processed within 1-2 business days</li>
-                    <li>You'll receive a shipping confirmation with tracking information</li>
-                    <li>Delivery typically takes 3-5 business days within France</li>
-                  </ul>
-                </div>
-
-                <div style="text-align: center; padding: 20px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 14px;">
+                <div style="text-align: center; padding: 20px; color: #6b7280;">
                   <p>Thank you for choosing NatureMama Heritage</p>
-                  <p style="margin: 5px 0;">Natural wellness from the French Alps since 2023</p>
-                  <p style="margin: 15px 0 0 0;">
-                    Questions? Contact us at <a href="mailto:support@naturemama-heritage.com" style="color: #16a34a;">support@naturemama-heritage.com</a>
-                  </p>
+                  <p>Natural wellness from the French Alps since 2023</p>
                 </div>
               </body>
               </html>
@@ -311,14 +360,16 @@ Resources:
                     Charset: 'UTF-8'
                   },
                   Text: {
-                    Data: `Order Confirmation - NatureMama Heritage\n\nThank you for your order, ${customer.fullName}!\n\nOrder Number: ${orderNumber}\nTotal: €${total.toFixed(2)}\n\nWe're preparing your natural wellness products with care and will send you tracking information soon.\n\nBest regards,\nNatureMama Heritage Team`,
+                    Data: `Order Confirmation - NatureMama Heritage\n\nThank you for your order, ${customer.fullName}!\n\nOrder Number: ${orderNumber}\nTotal: €${total.toFixed(2)}\n\nWe're preparing your natural wellness products with care.\n\nBest regards,\nNatureMama Heritage Team`,
                     Charset: 'UTF-8'
                   }
                 }
               }
             };
 
+            console.log('Sending email with params:', JSON.stringify(params, null, 2));
             await ses.sendEmail(params).promise();
+            console.log('Email sent successfully to:', customer.email);
           }
 
   # API Gateway REST API
@@ -347,7 +398,7 @@ Resources:
       ParentId: !Ref OrdersResource
       PathPart: '{orderNumber}'
 
-  # OPTIONS Method for CORS (orders)
+  # OPTIONS Method for /orders
   OrdersOptionsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -365,6 +416,7 @@ Resources:
               method.response.header.Access-Control-Allow-Origin: "'*'"
             ResponseTemplates:
               application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
         RequestTemplates:
           application/json: '{"statusCode": 200}'
       MethodResponses:
@@ -374,7 +426,7 @@ Resources:
             method.response.header.Access-Control-Allow-Methods: false
             method.response.header.Access-Control-Allow-Origin: false
 
-  # OPTIONS Method for CORS (individual orders)
+  # OPTIONS Method for /orders/{orderNumber}
   OrderOptionsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -392,6 +444,7 @@ Resources:
               method.response.header.Access-Control-Allow-Origin: "'*'"
             ResponseTemplates:
               application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
         RequestTemplates:
           application/json: '{"statusCode": 200}'
       MethodResponses:
@@ -413,6 +466,19 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 201
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
@@ -439,6 +505,10 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
@@ -456,6 +526,13 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 404
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
