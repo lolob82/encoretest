@@ -466,32 +466,6 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
-        IntegrationResponses:
-          - StatusCode: 200
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-          - StatusCode: 201
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-          - StatusCode: 400
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-          - StatusCode: 500
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-      MethodResponses:
-        - StatusCode: 200
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: false
-        - StatusCode: 201
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: false
-        - StatusCode: 400
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: false
-        - StatusCode: 500
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: false
 
   # GET Method for listing orders
   OrdersGetMethod:
@@ -505,14 +479,6 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
-        IntegrationResponses:
-          - StatusCode: 200
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-      MethodResponses:
-        - StatusCode: 200
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: false
 
   # GET Method for individual orders
   OrderGetMethod:
@@ -526,20 +492,6 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${OrderProcessorFunction.Arn}/invocations'
-        IntegrationResponses:
-          - StatusCode: 200
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-          - StatusCode: 404
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-      MethodResponses:
-        - StatusCode: 200
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: false
-        - StatusCode: 404
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: false
 
   # API Gateway Deployment
   ApiDeployment:
@@ -553,6 +505,27 @@ Resources:
     Properties:
       RestApiId: !Ref OrdersApi
       StageName: 'prod'
+
+  # Gateway Response for CORS
+  GatewayResponseDefault4XX:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ResponseType: DEFAULT_4XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+
+  GatewayResponseDefault5XX:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref OrdersApi
+      ResponseType: DEFAULT_5XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
 
   # Lambda Permission for API Gateway
   ApiGatewayInvokePermission:
