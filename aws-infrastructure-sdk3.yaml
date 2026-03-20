@@ -5,7 +5,7 @@ Parameters:
   SenderEmail:
     Type: String
     Description: 'Verified email address for sending order confirmations'
-    Default: 'orders@naturemama-heritage.com'
+    Default: 'lbusecke@amazon.fr'
 
 Resources:
   # DynamoDB Table for Orders
@@ -66,12 +66,12 @@ Resources:
                   - ses:SendRawEmail
                 Resource: '*'
 
-  # Lambda Function for Order Processing (AWS SDK v3)
+  # Lambda Function for Order Processing (Built-in AWS SDK)
   OrderProcessorFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: 'naturemama-order-processor'
-      Runtime: nodejs18.x
+      Runtime: nodejs20.x
       Handler: index.handler
       Role: !GetAtt OrderProcessorRole.Arn
       Timeout: 30
@@ -81,9 +81,15 @@ Resources:
           SENDER_EMAIL: !Ref SenderEmail
       Code:
         ZipFile: |
-          const AWS = require('aws-sdk');
-          const dynamodb = new AWS.DynamoDB.DocumentClient();
-          const ses = new AWS.SES({ region: 'us-east-1' });
+          // AWS SDK v3 is built into Lambda runtime for Node.js 18.x+
+          const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+          const { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
+          const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
+
+          // Initialize clients
+          const ddbClient = new DynamoDBClient({ region: "us-east-1" });
+          const dynamodb = DynamoDBDocumentClient.from(ddbClient);
+          const ses = new SESClient({ region: "us-east-1" });
 
           const corsHeaders = {
             'Access-Control-Allow-Origin': '*',
@@ -129,7 +135,8 @@ Resources:
                 headers: corsHeaders,
                 body: JSON.stringify({ 
                   error: 'Internal server error',
-                  message: error.message 
+                  message: error.message,
+                  stack: error.stack
                 })
               };
             }
@@ -164,12 +171,13 @@ Resources:
 
             console.log('Saving to DynamoDB:', orderData.orderNumber);
 
-            // Save to DynamoDB
+            // Save to DynamoDB using AWS SDK v3
             try {
-              await dynamodb.put({
+              const command = new PutCommand({
                 TableName: process.env.ORDERS_TABLE,
                 Item: orderData
-              }).promise();
+              });
+              await dynamodb.send(command);
               console.log('Order saved to DynamoDB successfully');
             } catch (dbError) {
               console.error('DynamoDB error:', dbError);
@@ -206,10 +214,11 @@ Resources:
             console.log('Getting order:', orderNumber);
             
             try {
-              const result = await dynamodb.get({
+              const command = new GetCommand({
                 TableName: process.env.ORDERS_TABLE,
                 Key: { orderNumber }
-              }).promise();
+              });
+              const result = await dynamodb.send(command);
 
               if (!result.Item) {
                 return {
@@ -253,7 +262,8 @@ Resources:
             }
 
             try {
-              const result = await dynamodb.scan(params).promise();
+              const command = new ScanCommand(params);
+              const result = await dynamodb.send(command);
 
               return {
                 statusCode: 200,
@@ -342,7 +352,7 @@ Resources:
               </html>
             `;
 
-            const params = {
+            const emailParams = {
               Source: process.env.SENDER_EMAIL,
               Destination: {
                 ToAddresses: [customer.email]
@@ -365,8 +375,9 @@ Resources:
               }
             };
 
-            console.log('Sending email with params:', JSON.stringify(params, null, 2));
-            await ses.sendEmail(params).promise();
+            console.log('Sending email with params:', JSON.stringify(emailParams, null, 2));
+            const command = new SendEmailCommand(emailParams);
+            await ses.send(command);
             console.log('Email sent successfully to:', customer.email);
           }
 
